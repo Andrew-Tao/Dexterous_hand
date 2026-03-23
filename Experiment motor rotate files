@@ -1,0 +1,26 @@
+import pigpio
+import time
+
+pi = pigpio.pi()
+
+SERVO1 = 17
+SERVO2 = 27
+
+def set_angle(pin, angle):
+    pulsewidth = 500 + (angle / 180.0) * 2000
+    pi.set_servo_pulsewidth(pin, pulsewidth)
+
+# Move both servos
+set_angle(SERVO1, 90)
+set_angle(SERVO2, 90)
+time.sleep(1)
+
+set_angle(SERVO1, 0)
+set_angle(SERVO2, 180)
+time.sleep(1)
+
+# Stop signals
+pi.set_servo_pulsewidth(SERVO1, 0)
+pi.set_servo_pulsewidth(SERVO2, 0)
+
+pi.stop()
