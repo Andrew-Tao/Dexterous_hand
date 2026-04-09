@@ -32,11 +32,19 @@ def angle_to_pulse(angle):
 # Format: (min_angle, max_angle)
 # You MUST tune these per finger
 servo_limits = [
-    (20, 140), (30, 150),   # Thumb (contract, extend)
-    (10, 130), (40, 160),   # Index
-    (15, 135), (35, 155),   # Middle
-    (20, 140), (30, 150),   # Ring
-    (25, 145), (35, 155)    # Pinky
+    (120, 180), (0, 60),   # Thumb (contract, extend)
+    (90, 180), (0, 90),   # Index
+    (90, 180), (0, 90),   # Middle
+    (90, 180), (0, 90),   # Ring
+    (120, 180), (0, 60)    # Pinky
+]
+
+servo_direction = [
+    1, 1,   # Thumb (contract, extend)
+    1, 1, # Index (example flipped)
+    1, 1,   # Middle
+    -1, -1, # Ring
+    -1, -1    # Pinky
 ]
 
 
@@ -114,17 +122,23 @@ while True:
             C = [lm[c].x, lm[c].y]
 
             angle = calculate_angle(A, B, C)
-            curl = curl_percentage(angle)
+            raw_curl = curl_percentage(angle)
 
-            # Smooth signal
-            curl = alpha * prev_curl[i] + (1 - alpha) * curl
-            prev_curl[i] = curl
+            # smoothing
+            smoothed_curl = alpha * prev_curl[i] + (1 - alpha) * raw_curl
+            prev_curl[i] = smoothed_curl
 
-            latest_curl[i] = curl
+            # default (no modification)
+            display_curl = smoothed_curl
+
+            # thumb modification
+            if i == 0:
+                display_curl = min(smoothed_curl, 50) * 2
+
+            latest_curl[i] = display_curl
 
             # Display debug
-            cv2.putText(frame, f"{name}:{int(curl)}%", (10, 30+30*i),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,0), 2)
+            cv2.putText(frame, f"{name}:{int(latest_curl[i])}%", (10, 30+30*i), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
 
     # -----------------------
     # 2. LIMIT SERVO UPDATES
@@ -133,26 +147,35 @@ while True:
 
     if current_time - last_update >= UPDATE_INTERVAL:
 
-        for i in range(5):
+       for i in range(5):
             curl = latest_curl[i]
+
+            # =========================
+            # 🖐️ THUMB SPECIAL SCALING
+            # =========================
+            if i == 0:  # Thumb
+                # 1. cap input at 50 first
+                curl = min(curl, 50)
+
+                # 2. double it
+                curl = curl * 2  # now 0–100 range but clipped behavior-wise
 
             # Get calibrated limits
             min_c, max_c = servo_limits[2*i]
             min_e, max_e = servo_limits[2*i+1]
 
-            # -----------------------
+            # =========================
             # ⚙️ ONE ACTIVE / ONE PASSIVE
-            # -----------------------
-            if curl > 50:
-                # Contracting finger
-                contract_angle = np.interp(curl, [50,100], [min_c, max_c])
-                extend_angle = max_e  # fully relaxed
-            else:
-                # Extending finger
-                extend_angle = np.interp(curl, [0,50], [max_e, min_e])
-                contract_angle = min_c  # relaxed
+            # =========================
+            contract_angle = np.interp(curl, [0, 100], [max_c, min_c])
+            extend_angle   = np.interp(curl, [0, 100], [max_e, min_e])
 
-            # Send to servos
+            dir_mult = servo_direction[2*i]
+
+            # apply inversion if needed
+            contract_angle = 180 - contract_angle if dir_mult == -1 else contract_angle
+            extend_angle   = 180 - extend_angle   if dir_mult == -1 else extend_angle
+    
             pi.set_servo_pulsewidth(
                 servo_pins[2*i],
                 angle_to_pulse(contract_angle)
@@ -163,15 +186,15 @@ while True:
                 angle_to_pulse(extend_angle)
             )
 
-        last_update = current_time
+            last_update = current_time
 
-    # -----------------------
-    # SHOW FRAME
-    # -----------------------
-    cv2.imshow("Hand Control", frame)
-
-    if cv2.waitKey(1) & 0xFF == 27:
-        break
+            # -----------------------
+            # SHOW FRAME
+            # -----------------------
+            cv2.imshow("Hand Control", frame)
+    
+            if cv2.waitKey(1) & 0xFF == 27:
+                break
 
 
 # =======================
