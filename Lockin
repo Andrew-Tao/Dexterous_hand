@@ -1,0 +1,186 @@
+import cv2
+import mediapipe as mp
+import numpy as np
+import pigpio
+import time
+
+# =======================
+# 🔌 SERVO SETUP
+# =======================
+pi = pigpio.pi()
+
+# GPIO pins: (contract, extend) per finger
+servo_pins = [
+    4,5,   # Thumb
+    6,7,   # Index
+    8,9,   # Middle
+    10,11, # Ring
+    12,13  # Pinky
+]
+
+for pin in servo_pins:
+    pi.set_mode(pin, pigpio.OUTPUT)
+
+# Convert angle → PWM pulse
+def angle_to_pulse(angle):
+    return int(500 + (angle / 180.0) * 2000)  # 500–2500 µs
+
+
+# =======================
+# ⚙️ PER-SERVO CALIBRATION
+# =======================
+# Format: (min_angle, max_angle)
+# You MUST tune these per finger
+servo_limits = [
+    (20, 140), (30, 150),   # Thumb (contract, extend)
+    (10, 130), (40, 160),   # Index
+    (15, 135), (35, 155),   # Middle
+    (20, 140), (30, 150),   # Ring
+    (25, 145), (35, 155)    # Pinky
+]
+
+
+# =======================
+# 🧠 MEDIAPIPE SETUP
+# =======================
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(static_image_mode=False, min_detection_confidence=0.5)
+
+
+# =======================
+# 📐 MATH FUNCTIONS
+# =======================
+def calculate_angle(a, b, c):
+    a, b, c = np.array(a), np.array(b), np.array(c)
+    ba = a - b
+    bc = c - b
+    cosine = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
+    angle = np.arccos(np.clip(cosine, -1.0, 1.0))
+    return np.degrees(angle)
+
+def curl_percentage(angle):
+    return np.clip((180 - angle) / 150 * 100, 0, 100)
+
+
+# =======================
+# ✋ FINGER LANDMARKS
+# =======================
+fingers = {
+    "Thumb":  (1, 2, 4),
+    "Index":  (5, 6, 8),
+    "Middle": (9, 10, 12),
+    "Ring":   (13, 14, 16),
+    "Pinky":  (17, 18, 20)
+}
+
+
+# =======================
+# 🧊 SMOOTHING + TIMING
+# =======================
+prev_curl = [0]*5
+alpha = 0.7  # smoothing factor
+
+latest_curl = [0]*5  # continuously updated
+last_update = 0
+UPDATE_INTERVAL = 0.2  # seconds (5 Hz)
+
+
+# =======================
+# 📷 CAMERA
+# =======================
+cap = cv2.VideoCapture(0)
+
+
+# =======================
+# 🔁 MAIN LOOP
+# =======================
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands.process(frame_rgb)
+
+    # -----------------------
+    # 1. ALWAYS UPDATE VISION
+    # -----------------------
+    if results.multi_hand_landmarks:
+        lm = results.multi_hand_landmarks[0].landmark
+
+        for i, (name, (a,b,c)) in enumerate(fingers.items()):
+            A = [lm[a].x, lm[a].y]
+            B = [lm[b].x, lm[b].y]
+            C = [lm[c].x, lm[c].y]
+
+            angle = calculate_angle(A, B, C)
+            curl = curl_percentage(angle)
+
+            # Smooth signal
+            curl = alpha * prev_curl[i] + (1 - alpha) * curl
+            prev_curl[i] = curl
+
+            latest_curl[i] = curl
+
+            # Display debug
+            cv2.putText(frame, f"{name}:{int(curl)}%", (10, 30+30*i),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,0), 2)
+
+    # -----------------------
+    # 2. LIMIT SERVO UPDATES
+    # -----------------------
+    current_time = time.time()
+
+    if current_time - last_update >= UPDATE_INTERVAL:
+
+        for i in range(5):
+            curl = latest_curl[i]
+
+            # Get calibrated limits
+            min_c, max_c = servo_limits[2*i]
+            min_e, max_e = servo_limits[2*i+1]
+
+            # -----------------------
+            # ⚙️ ONE ACTIVE / ONE PASSIVE
+            # -----------------------
+            if curl > 50:
+                # Contracting finger
+                contract_angle = np.interp(curl, [50,100], [min_c, max_c])
+                extend_angle = max_e  # fully relaxed
+            else:
+                # Extending finger
+                extend_angle = np.interp(curl, [0,50], [max_e, min_e])
+                contract_angle = min_c  # relaxed
+
+            # Send to servos
+            pi.set_servo_pulsewidth(
+                servo_pins[2*i],
+                angle_to_pulse(contract_angle)
+            )
+
+            pi.set_servo_pulsewidth(
+                servo_pins[2*i+1],
+                angle_to_pulse(extend_angle)
+            )
+
+        last_update = current_time
+
+    # -----------------------
+    # SHOW FRAME
+    # -----------------------
+    cv2.imshow("Hand Control", frame)
+
+    if cv2.waitKey(1) & 0xFF == 27:
+        break
+
+
+# =======================
+# 🧹 CLEANUP
+# =======================
+cap.release()
+cv2.destroyAllWindows()
+
+for pin in servo_pins:
+    pi.set_servo_pulsewidth(pin, 0)
+
+pi.stop()
