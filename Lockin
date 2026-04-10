@@ -32,11 +32,11 @@ def angle_to_pulse(angle):
 # Format: (min_angle, max_angle)
 # You MUST tune these per finger
 servo_limits = [
-    (120, 180), (0, 60),   # Thumb (contract, extend)
-    (90, 180), (0, 90),   # Index
-    (90, 180), (0, 90),   # Middle
-    (90, 180), (0, 90),   # Ring
-    (120, 180), (0, 60)    # Pinky
+    (80, 180), (0, 100),   # Thumb (contract, extend)
+    (50, 180), (0, 130),   # Index
+    (80, 180), (0, 100),   # Middle
+    (80, 180), (0, 100),   # Ring
+    (80, 180), (0, 100)    # Pinky
 ]
 
 servo_direction = [
@@ -167,8 +167,8 @@ while True:
             # =========================
             # ⚙️ ONE ACTIVE / ONE PASSIVE
             # =========================
-            contract_angle = np.interp(curl, [0, 100], [max_c, min_c])
-            extend_angle   = np.interp(curl, [0, 100], [max_e, min_e])
+            contract_angle = np.interp(curl, [0, 100], [min_c, max_c])
+            extend_angle   = np.interp(curl, [0, 100], [min_e, max_e])
 
             dir_mult = servo_direction[2*i]
 
